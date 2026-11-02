@@ -52,7 +52,7 @@ Manatee 已经在菜单栏常驻，并且已经知道有哪些 agent 在跑（`S
 
 三条上报路径：
 
-1. **Claude Code hooks** — 在 `~/.claude/settings.json` 注册 `Notification`（需要权限/等待输入时触发）与 `Stop`（回合结束）。payload 里的具体字段**未验证**，POC 第一步就是抓真实事件落盘。
+1. **Claude Code hooks** — 在 `~/.claude/settings.json` 注册 `Notification`（需要权限/等待输入时触发）与 `Stop`（回合结束）。payload 字段已在本机 Claude Code 2.1.316 实测验证，见本节末尾「已验证 payload」。
 2. **Codex** — `~/.codex/config.toml` 的 `notify` 命令，同样走下面的通用 CLI。
 3. **通用 CLI** — 提供 `manatee-agent-hook --state waiting --agent <id> --cwd <path> [--message <text>]`，任何 agent 都能调。也是前两条最终落到的东西。
 
@@ -64,11 +64,19 @@ Manatee 已经在菜单栏常驻，并且已经知道有哪些 agent 在跑（`S
   "agent": "claude-code",
   "state": "waiting",
   "cwd": "/Users/gaogao/Documents/Hermes/workshop",
-  "message": "需要权限：rm -rf build/",
-  "pid": 12345,
+  "message": "等待权限确认",
   "updated_at": 1761955200
 }
 ```
+
+进程映射由现有 `ProcessScanner` 按 `cwd` 对齐；hooks 只负责状态，不写进程号。
+
+**已验证 payload**（DYVI-31，2026-11-02，Claude Code 2.1.316，13 条原始 JSON）
+
+- 事件：`Notification`（`notification_type` = `permission_prompt` | `idle_prompt`）、`Stop`
+- 两类事件都带 `session_id` / `cwd` / `transcript_path` / `prompt_id` / `hook_event_name`；**没有 `pid`**
+- 状态映射：`Stop` → 已完成；`Notification` + `permission_prompt` → 等待权限确认；`Notification` + `idle_prompt` → 等待输入。只看事件名会把「等输入」误判成「等权限」，必须两者一起看
+- `Notification.message` 只有通用文案（`Claude needs your permission` / `Claude is waiting for your input`），不含命令
 
 ### 5.2 读取与过期
 
@@ -88,8 +96,8 @@ Manatee 已经在菜单栏常驻，并且已经知道有哪些 agent 在跑（`S
 
 ### 5.4 面板
 
-- 每个 agent 行增加状态徽标：`运行中` / `等待确认` / `已完成`
-- 等待行显示 `message` 摘要（超 60 字截断），点击展开完整内容
+- 每个 agent 行增加状态徽标：`运行中` / `等待权限确认` / `等待输入` / `已完成`
+- 等待行只显示固定标签 `等待权限确认` / `等待输入` / `已完成`，不展开命令内容——payload 里没有命令文本，硬做就得读 transcript，与隐私约束冲突
 - 等待行置顶排序
 
 ### 5.5 通知
@@ -97,8 +105,9 @@ Manatee 已经在菜单栏常驻，并且已经知道有哪些 agent 在跑（`S
 Manatee 目前没有通知能力（全仓库 `UNUserNotification` 命中 0 处），需要新增：
 
 - 状态 非等待 → 等待 时发一条本地通知，标题「Claude Code 在等你」，副标题为项目目录名
-- **同一会话 5 分钟内不重复发**，避免刷屏
-- 通知正文不含命令全文（隐私），完整内容只在面板里看
+- **按 `session_id` 做 5 分钟冷却**：同一会话 5 分钟内不重复发。实测 `Stop` 之后约 60s（60063ms / 60068ms）必来一条 `idle_prompt`，不做冷却一次「完成」会弹两条；**`Stop` 与随后 60s 内的 `idle_prompt` 合并为一次**
+- 通知正文只允许 `Notification.message` 原文或固定标签（`等待权限确认` / `等待输入` / `已完成`），不含命令全文
+- **硬约束**：`Stop` 的 `last_assistant_message` / `background_tasks[].command` / `transcript_path` 一律不进通知、不进日志、不进面板
 - 首次使用需要引导用户授权通知权限，拒绝授权则静默降级为只做菜单栏标记
 
 ### 5.6 开关
@@ -116,11 +125,19 @@ Manatee 目前没有通知能力（全仓库 `UNUserNotification` 命中 0 处�
 | 同一目录多会话 | 各自独立文件，面板分行显示，菜单栏只显示总数 |
 | 状态文件损坏 | 跳过该文件，不崩溃，debug log 记录 |
 | agent 崩溃未清状态 | 5 分钟过期机制兜底 |
-| 会话 id 冲突 | 用 `pid + cwd` 哈希兜底 |
+| 会话 id 冲突 | 用 `pid + cwd` 哈希兜底（pid 由 `ProcessScanner` 补齐，见下） |
+
+会话 key 的优先级（与 DYVI-31 裁决一致）：
+
+1. 有 `session_id` → 直接用 `session_id`
+2. 没有，但 `ProcessScanner` 按 `cwd` 只匹配到 1 个 agent 进程 → `pc-<sha256(realpath(cwd) + "\0" + pid)[0:16]>`
+3. 对不上或多于 1 个 → `cw-<sha256(realpath(cwd))[0:16]>`，同目录多会话合并成一个，明确标注为降级
+
+hooks payload 本身没有 `pid`，第 2 条的 pid 只能由 `ProcessScanner` 按 `cwd` 反查补齐；哈希用小写十六进制，同一 key 后到覆盖先到。
 
 ## 7. 验收标准
 
-1. Claude Code 触发一次权限确认 → **2 秒内**菜单栏出现 `⏸`，面板该行显示「等待确认」
+1. Claude Code 触发一次权限确认 → **2 秒内**菜单栏出现 `⏸`，面板该行显示「等待权限确认」
 2. 点「允许」→ **5 秒内**标记消失，面板回到运行中
 3. 两个会话同时等待 → 菜单栏显示 `⏸2`
 4. 手动写一个 `updated_at` 为 6 分钟前的状态文件 → 标记不出现（过期生效）
@@ -145,7 +162,7 @@ Manatee 目前没有通知能力（全仓库 `UNUserNotification` 命中 0 处�
 
 ## 9. 风险
 
-1. **hook payload 未验证**——最大不确定性。若 `Notification` 事件拿不到 cwd/session id，需要退化为「按进程 + 最近文件变化」推断，方案复杂度上升。
+1. **hook payload 只验证了 Claude Code 的一条路径**——`Notification` / `Stop` 字段已在 2.1.316 实测（DYVI-31），剩余不确定性在 Codex `notify` 与前台 TUI 权限框（只用 `--bg` 证明了同一事件路径）。这两块补验前，不要对外宣称全路径已支持。
 2. **Claude Code 版本迭代**——hooks 字段可能变；实现要做「解析失败不影响 agent」，并记录最近一次成功事件时间。
 3. **菜单栏空间**——温度数字 + 圆点 + 等待标记，在 1080p 外接屏上可能过挤；需要真机截图确认，必要时把数量并入 tooltip。
 4. **功能稀释 Manatee 定位**——「温度归因」和「agent 等待」是两个概念。默认关闭 + 独立开关是缓解手段，但长期需要明确产品主线。
