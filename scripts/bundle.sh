@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 打包成可双击运行的 .app（ad-hoc 签名，不需要开发者账号）
 #
-# 改名只用改两处：Sources/HotPot/PanelView.swift 的 AppInfo（name / slug）
+# 改名只用改两处：Sources/Manatee/PanelView.swift 的 AppInfo（name / slug）
 # 和 Resources/Info.plist 的 CFBundleName/CFBundleExecutable。
 # 这里通过 Info.plist 读名字，不再硬编码。
 set -euo pipefail
@@ -13,7 +13,7 @@ EXEC=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" Resources/Info.pli
 APP="build/$NAME.app"
 
 swift build -c "$CONFIG"
-# SPM 的产物名跟 target 名走（Package.swift 里是 HotPot），跟 Info.plist 无关，
+# SPM 的产物名跟 target 名走（Package.swift 里是 Manatee），跟 Info.plist 无关，
 # 所以这里按 target 名找，再拷成 EXEC 名。
 BIN=".build/$CONFIG/Manatee"
 [ -f "$BIN" ] || { echo "构建产物不存在: $BIN"; exit 1; }
