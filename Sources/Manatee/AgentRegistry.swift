@@ -75,6 +75,9 @@ struct AgentSession {
     var busyChildren: [(name: String, cpu: Double)]
     var cooled: Bool
     var hasOtherUid: Bool
+    /// 根进程的工作目录。hook 上报的 `cwd` 只有对上它，才能确定是哪个会话在等。
+    /// 拿不到（进程已退出 / 别人的进程）时为空串。
+    var cwd: String = ""
 
     var summary: String {
         if busyChildren.isEmpty { return L10n.t("空闲", "idle") }
@@ -158,7 +161,10 @@ enum SessionAggregator {
                 pids: e.pids.sorted(),
                 busyChildren: e.kids.sorted { $0.1 > $1.1 },
                 cooled: false,
-                hasOtherUid: e.otherUid
+                hasOtherUid: e.otherUid,
+                // 会话数 ≤10，每个 tick 每个根一次 syscall 可以接受；
+                // 没有它，hook 的 cwd 就只能靠猜，面板会把徽标挂错行
+                cwd: ProcessCwd.of(r) ?? ""
             )
         }
         .sorted { $0.cpuPercent > $1.cpuPercent }

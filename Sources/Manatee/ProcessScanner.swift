@@ -15,6 +15,24 @@ struct ProcInfo {
     var otherUid = false    // 属于别的用户（无权限降级）
 }
 
+/// 进程当前工作目录。
+///
+/// 两个地方要用：端口列表判断服务属于哪个项目；agent 会话把 hook 上报的 `cwd`
+/// 对到具体进程。`PROC_PIDVNODEPATHINFO` 同用户免 root，拿不到（别人家的进程、
+/// 已退出）返回 nil。
+enum ProcessCwd {
+    static func of(_ pid: pid_t) -> String? {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) > 0 else { return nil }
+        let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { raw -> String in
+            guard let base = raw.baseAddress else { return "" }
+            return String(cString: base.assumingMemoryBound(to: CChar.self))
+        }
+        return path.isEmpty ? nil : path
+    }
+}
+
 /// 用 libproc 直接扫全表，不 fork ps。
 final class ProcessScanner {
 

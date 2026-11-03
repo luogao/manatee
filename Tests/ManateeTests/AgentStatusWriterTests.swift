@@ -126,6 +126,42 @@ struct AgentStatusWriterTests {
         }
     }
 
+    @Test("notification_type 落盘并原样读回；不传时整键省略")
+    func 等待细分() throws {
+        try withWriterTempDir { dir in
+            let writer = AgentStatusWriter(directory: dir)
+            let typed = try writer.write(sessionID: "s1", agent: "claude-code", state: "waiting",
+                                         cwd: "/tmp", notificationType: "idle_prompt", now: writerNow)
+            try writer.write(sessionID: "s2", agent: "claude-code", state: "waiting",
+                             cwd: "/tmp", now: writerNow)
+
+            let scan = AgentStatusStore(directory: dir).scan(now: writerNow)
+            let byID = Dictionary(uniqueKeysWithValues: scan.statuses.map { ($0.sessionID, $0) })
+            #expect(byID["s1"]?.notificationType == "idle_prompt")
+            #expect(byID["s2"]?.notificationType == nil)
+
+            // 键名必须和读取侧/Claude Code hook 对齐
+            let data = try Data(contentsOf: typed)
+            let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(json["notification_type"] as? String == "idle_prompt")
+        }
+    }
+
+    @Test("非法 notification-type → 抛错，不建目录也不写文件")
+    func 拒绝非法细分() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ManateeAgentStatusWriterTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("state", isDirectory: true)
+
+        expectWriterError(.invalidNotificationType("nope")) {
+            try AgentStatusWriter(directory: dir).write(
+                sessionID: "s5", agent: "x", state: "waiting", cwd: "/tmp",
+                notificationType: "nope", now: writerNow)
+        }
+        #expect(FileManager.default.fileExists(atPath: dir.path) == false)
+    }
+
     @Test("JSON 字段与读取方对齐：updated_at 是 epoch 秒，不写 pid")
     func 字段契约() throws {
         try withWriterTempDir { dir in

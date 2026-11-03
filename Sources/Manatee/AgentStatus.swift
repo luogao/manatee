@@ -20,6 +20,9 @@ struct AgentStatus: Equatable, Sendable {
     let state: AgentActivity
     let cwd: String
     let message: String?
+    /// Claude Code `Notification` 的细分：`permission_prompt` / `idle_prompt`。
+    /// 旧状态文件没有这个键时保持 nil（界面按「等待中」降级，不能当成等权限）。
+    let notificationType: String?
     /// hook payload 里没有 pid，通用 CLI 才可能带，所以可选。
     let pid: Int?
     let updatedAt: Date
@@ -60,10 +63,20 @@ final class AgentStatusStore: Sendable {
             .appendingPathComponent("agent-state", isDirectory: true)
     }()
 
+    /// 实际读取的目录。`MANATEE_STATE_DIR` 只给测试和 `--e2e` 指向临时目录；
+    /// 写入方也复用这一处，避免读写两侧对同一个环境变量有两种解释。
+    static var resolvedDirectory: URL {
+        if let override = ProcessInfo.processInfo.environment["MANATEE_STATE_DIR"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return defaultDirectory
+    }
+
     let directory: URL
 
     /// - Note: 不创建目录。目录不存在是正常状态（功能未开启或还没人上报）。
-    init(directory: URL = AgentStatusStore.defaultDirectory) {
+    init(directory: URL = AgentStatusStore.resolvedDirectory) {
         self.directory = directory
     }
 
@@ -143,6 +156,11 @@ final class AgentStatusStore: Sendable {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : text
         }
+        // 空字符串按「没写」处理；未知取值原样保留，界面再降级成「等待中」
+        let notificationType = raw.notificationType.flatMap { text -> String? in
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
 
         return .status(AgentStatus(
             sessionID: sessionID,
@@ -150,6 +168,7 @@ final class AgentStatusStore: Sendable {
             state: stale ? .idle : parsedState,
             cwd: cwd,
             message: message,
+            notificationType: notificationType,
             pid: raw.pid,
             updatedAt: updatedAt,
             isStale: stale
@@ -163,11 +182,13 @@ final class AgentStatusStore: Sendable {
         let state: String
         let cwd: String
         let message: String?
+        let notificationType: String?
         let pid: Int?
         let updatedAt: Double
 
         private enum CodingKeys: String, CodingKey {
             case agent, state, cwd, message, pid
+            case notificationType = "notification_type"
             case updatedAt = "updated_at"
         }
     }

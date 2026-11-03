@@ -10,13 +10,11 @@ struct AgentStatusWriter {
 
     /// 状态目录：默认与读取方相同。`MANATEE_STATE_DIR` 只给测试和 `--e2e` 指向
     /// 临时目录，正常运行时不应设置——否则写出去的记录读取方看不到。
-    static var resolvedDirectory: URL {
-        if let override = ProcessInfo.processInfo.environment["MANATEE_STATE_DIR"],
-           !override.isEmpty {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        return AgentStatusStore.defaultDirectory
-    }
+    static var resolvedDirectory: URL { AgentStatusStore.resolvedDirectory }
+
+    /// `notification_type` 的合法取值。只放 Claude Code 已验证的两种：
+    /// 上游以后加新值时应扩这里，读取侧仍会把未知值降级成「等待中」。
+    static let allowedNotificationTypes: Set<String> = ["permission_prompt", "idle_prompt"]
 
     let directory: URL
 
@@ -38,6 +36,7 @@ struct AgentStatusWriter {
         state: String,
         cwd: String,
         message: String? = nil,
+        notificationType: String? = nil,
         now: Date = Date()
     ) throws -> URL {
         // 读取侧的会话 id 只从文件名取，所以它必须是一个安全的单段文件名：
@@ -59,9 +58,16 @@ struct AgentStatusWriter {
         guard let activity = AgentActivity(rawValue: state) else {
             throw AgentStatusWriterError.invalidState(state)
         }
+        // 空串按没传处理（hook 模板展开出空值时不该整条记录失败）；非法值必须当场拒绝
+        let trimmedType = notificationType?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let type = (trimmedType?.isEmpty ?? true) ? nil : trimmedType
+        if let type, !Self.allowedNotificationTypes.contains(type) {
+            throw AgentStatusWriterError.invalidNotificationType(type)
+        }
 
         let payload = Payload(agent: agent, state: activity.rawValue, cwd: cwd,
-                              message: message, updatedAt: now.timeIntervalSince1970)
+                              message: message, notificationType: type,
+                              updatedAt: now.timeIntervalSince1970)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         var data = try encoder.encode(payload)
@@ -98,10 +104,12 @@ struct AgentStatusWriter {
         let state: String
         let cwd: String
         let message: String?
+        let notificationType: String?
         let updatedAt: Double
 
         private enum CodingKeys: String, CodingKey {
             case agent, state, cwd, message
+            case notificationType = "notification_type"
             case updatedAt = "updated_at"
         }
     }
@@ -113,6 +121,7 @@ enum AgentStatusWriterError: Error, Equatable, CustomStringConvertible {
     case emptyAgent
     case emptyCwd
     case invalidState(String)
+    case invalidNotificationType(String)
     case writeFailed(errno: Int32)
 
     var description: String {
@@ -125,6 +134,8 @@ enum AgentStatusWriterError: Error, Equatable, CustomStringConvertible {
             return "cwd 不能为空"
         case .invalidState(let state):
             return "非法 state \"\(state)\"（可选 running|waiting|idle|error）"
+        case .invalidNotificationType(let type):
+            return "非法 notification-type \"\(type)\"（可选 permission_prompt|idle_prompt）"
         case .writeFailed(let code):
             return "写入失败（errno \(code)）"
         }

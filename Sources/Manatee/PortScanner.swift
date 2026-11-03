@@ -70,7 +70,7 @@ enum PortScanner {
             let ppid = parentPid(curPid) ?? 0
             let age = runTime(curPid) ?? 0
             let stray = ppid == 1 && age < maxAge
-            let cwd = workingDirectory(curPid) ?? ""
+            let cwd = ProcessCwd.of(curPid) ?? ""
             let argv = ProcessScanner.arguments(pid: curPid)
             let pname = processName(ppid) ?? ""
             for p in curPorts where p >= 1024 {
@@ -152,18 +152,6 @@ enum PortScanner {
             host = String(host.dropFirst().dropLast())
         }
         return host
-    }
-
-    /// 进程当前工作目录：用来判断这服务属于哪个项目
-    private static func workingDirectory(_ pid: Int32) -> String? {
-        var info = proc_vnodepathinfo()
-        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) > 0 else { return nil }
-        let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { raw -> String in
-            guard let base = raw.baseAddress else { return "" }
-            return String(cString: base.assumingMemoryBound(to: CChar.self))
-        }
-        return path.isEmpty ? nil : path
     }
 
     private static func processName(_ pid: Int32) -> String? {

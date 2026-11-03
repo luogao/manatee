@@ -13,11 +13,16 @@ final class AppModel: ObservableObject {
     @Published var alerts: [Int32: TimeInterval] = [:]
     /// 残留的开发服务器
     @Published var devServices: [DevService] = []
+    /// 正在等用户输入的会话（只含 `.waiting`，过期的已由 store 降级成 `.idle`）。
+    /// 菜单栏的 ⏸ 与面板徽标都读这一份，保证两处计数一致。
+    @Published var waitingStatuses: [AgentStatus] = []
     /// 面板是否展开：关着的时候只需要刷新菜单栏温度，不用每 2 秒扫全表
     var panelOpen = false
 
     private let scanner = ProcessScanner()
     private let temp = TemperatureReader()
+    /// 目录不存在 = 功能没开，scan 返回空且不建目录
+    private let statusStore = AgentStatusStore()
     /// 阈值来自 rules.json 的 alert 段（默认 5 分钟、200% CPU）
     private let history = SessionHistory(threshold: Rules.shared.alert.cpuPercent,
                                          sustain: Rules.shared.alert.sustainSeconds)
@@ -42,10 +47,17 @@ final class AppModel: ObservableObject {
         sessions = SessionAggregator.build(from: procs)
         processCount = procs.count
         devServices = PortScanner.scan()
+        waitingStatuses = scanWaiting()
         if let hot = temp?.hottestSilicon() ?? temp?.hottestAny() {
             temperature = hot.celsius
             sensorName = hot.name
         }
+    }
+
+    /// 只保留 `.waiting` 且未过期的记录。
+    /// store 已把超 5 分钟的记录降级成 `.idle`，这里再挡一次是防御注入数据。
+    private func scanWaiting() -> [AgentStatus] {
+        statusStore.scan().statuses.filter { $0.state == .waiting && !$0.isStale }
     }
 
     private var tickCount = 0
@@ -59,9 +71,17 @@ final class AppModel: ObservableObject {
         // 有会话处于降温状态时 6 秒扫一次（要抓 agent 新起的进程），否则关面板 10 秒
         let needScan = panelOpen || (!cooled.isEmpty && tickCount % 3 == 1) || (tickCount % 5 == 1)
         let needPorts = (tickCount % 30 == 1)        // 60 秒
-        guard needTemp || needScan || needPorts else { return }
         queue.async { [weak self] in
             guard let self else { return }
+            // 等待状态每个 tick 都扫：菜单栏要求 2 秒内可见，不能等 10 秒的进程扫描。
+            // 目录通常不存在（功能没开），那只是一次失败的 readdir，不建目录。
+            let waiting = self.scanWaiting()
+            DispatchQueue.main.async {
+                // 数组没变就不发布，避免关面板时每 2 秒白刷一次 SwiftUI
+                if self.waitingStatuses != waiting { self.waitingStatuses = waiting }
+            }
+
+            guard needTemp || needScan || needPorts else { return }
             let procs = needScan ? self.scanner.scan() : []
             let sessions = needScan ? SessionAggregator.build(from: procs) : self.sessions
             let hot = needTemp ? (self.temp?.hottestSilicon() ?? self.temp?.hottestAny()) : nil
