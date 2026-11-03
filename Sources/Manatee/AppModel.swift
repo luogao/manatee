@@ -26,6 +26,11 @@ final class AppModel: ObservableObject {
     /// 阈值来自 rules.json 的 alert 段（默认 5 分钟、200% CPU）
     private let history = SessionHistory(threshold: Rules.shared.alert.cpuPercent,
                                          sustain: Rules.shared.alert.sustainSeconds)
+    /// 等待态本地通知。裸二进制里 isAvailable == false，整层 no-op，不会崩。
+    private let notifier = AgentNotifier()
+    /// 通知标题用规则表里的展示名（claude → Claude Code）。只算一次，别每 tick 重建。
+    private static let agentDisplayNames: [String: String] =
+        Dictionary(uniqueKeysWithValues: AgentRegistry.all.map { ($0.id, $0.name) })
     private let queue = DispatchQueue(label: "whoiscooking.scan", qos: .utility)
     private var timer: Timer?
     private var warming = true
@@ -75,10 +80,14 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             // 等待状态每个 tick 都扫：菜单栏要求 2 秒内可见，不能等 10 秒的进程扫描。
             // 目录通常不存在（功能没开），那只是一次失败的 readdir，不建目录。
-            let waiting = self.scanWaiting()
+            let statuses = self.statusStore.scan().statuses
+            let waiting = statuses.filter { $0.state == .waiting && !$0.isStale }
             DispatchQueue.main.async {
                 // 数组没变就不发布，避免关面板时每 2 秒白刷一次 SwiftUI
                 if self.waitingStatuses != waiting { self.waitingStatuses = waiting }
+                // 通知在 main 上算：状态推进是单线程的，UNUserNotificationCenter
+                // 的权限回调也回 main。裸二进制里 notifier 自己 no-op。
+                self.notifier.evaluate(statuses: statuses, agentNames: Self.agentDisplayNames)
             }
 
             guard needTemp || needScan || needPorts else { return }
