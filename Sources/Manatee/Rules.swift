@@ -24,12 +24,56 @@ struct AlertRule: Codable {
     var sustainSeconds: Double
 }
 
+/// `rules.json` 顶层的 `feature` 段：按功能拆开关。
+///
+/// 老用户的文件里没有这一整段，所以解码必须容忍缺失（见 `Rules.init(from:)`）。
+struct FeatureRules: Codable, Equatable {
+    var agentStatus: AgentStatusFeature
+
+    static let `default` = FeatureRules(agentStatus: .default)
+
+    init(agentStatus: AgentStatusFeature = .default) {
+        self.agentStatus = agentStatus
+    }
+}
+
+extension FeatureRules {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agentStatus = try c.decodeIfPresent(AgentStatusFeature.self, forKey: .agentStatus) ?? .default
+    }
+}
+
+/// agent 等待态功能的总开关。默认 **关**：不读状态目录、不显示 ⏸、不发通知。
+/// 写入侧 `--hook` 不受影响，开关只管读 / 渲染 / 通知。
+struct AgentStatusFeature: Codable, Equatable {
+    var enabled: Bool
+
+    static let `default` = AgentStatusFeature(enabled: false)
+
+    init(enabled: Bool = false) {
+        self.enabled = enabled
+    }
+}
+
+extension AgentStatusFeature {
+    /// `{"agentStatus": {}}` 也要能解码，缺 `enabled` 时按关处理。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+    }
+}
+
 struct Rules: Codable {
     var version: Int
     var agents: [AgentRule]
     var devServerCommands: [String]
     var ignorePortCommands: [String]
     var alert: AlertRule
+    /// 功能开关。**不能是解码必填字段**：老文件没有 `feature` 键，非可选字段会让
+    /// 整份 rules.json 解码失败 → `load()` 走 catch → 备份并回退默认，等于把用户
+    /// 已有配置整体停用。见 `Rules.init(from:)` 与 AgentStatusFeatureFlagTests。
+    var feature: FeatureRules = .default
 
     static let path: URL = URL(fileURLWithPath: AppInfo.supportPath)
         .appendingPathComponent("rules.json")
@@ -145,5 +189,23 @@ struct Rules: Codable {
         if let data = try? encoder.encode(self) {
             try? data.write(to: Rules.path)
         }
+    }
+}
+
+extension Rules {
+    /// 手写解码只为 `feature` 的向后兼容：缺失时补默认，其余字段照旧严格解码
+    /// （坏 JSON 仍然 fail fast，走 `load()` 的备份回退）。
+    ///
+    /// 放在 extension 里而不是结构体正文：Swift 只在正文里声明过初始化器时
+    /// 才吞掉逐成员初始化器，而 `Rules.default` 和测试都在用那个初始化器。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        agents = try c.decode([AgentRule].self, forKey: .agents)
+        devServerCommands = try c.decode([String].self, forKey: .devServerCommands)
+        ignorePortCommands = try c.decode([String].self, forKey: .ignorePortCommands)
+        alert = try c.decode(AlertRule.self, forKey: .alert)
+        // 缺 feature 段 → 默认全关；用户自己写的 enabled 一律原样保留
+        feature = try c.decodeIfPresent(FeatureRules.self, forKey: .feature) ?? .default
     }
 }

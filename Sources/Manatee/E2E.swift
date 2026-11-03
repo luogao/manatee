@@ -2,6 +2,21 @@ import Foundation
 import AppKit
 import SwiftUI
 
+/// `--e2e` 关闭态探针：真被调用就返回一条等待记录，让漏掉的调用在菜单栏文案上露出来。
+private final class E2EStatusReader: AgentStatusReading {
+    var scanCount = 0
+
+    func scan(now: Date) -> AgentStatusStore.ScanResult {
+        scanCount += 1
+        return AgentStatusStore.ScanResult(statuses: [
+            AgentStatus(sessionID: "e2e-closed", agent: "claude", state: .waiting,
+                        cwd: "/Users/e2e/project", message: nil,
+                        notificationType: "permission_prompt", pid: nil,
+                        updatedAt: now, isStale: false),
+        ], skippedCount: 0)
+    }
+}
+
 /// `Manatee --e2e`：不需要窗口、不需要辅助功能权限的自检。
 /// 覆盖「启动链路能不能走通、视图能不能建、存储能不能读写」，
 /// 用来兜住 CI 里最容易漏的那类回归（崩在启动、视图空白、SQL 写坏）。
@@ -66,6 +81,20 @@ enum E2E {
                   renders(PanelView(model: model, scrollable: true), in: CGSize(width: 340, height: 580)),
                   "2 个 waiting")
         }
+
+        // 6b) 关闭态：spy 里有等待记录也不会被读到，菜单栏不能出现 ⏸。
+        //     探针被调用就返回一条 waiting——如果哪天短路被去掉，这条会立刻挂。
+        let closedSpy = E2EStatusReader()
+        MainActor.assumeIsolated {
+            let closed = AppModel(statusStore: closedSpy,
+                                  notifier: AgentNotifier(bundleIdentifier: nil),
+                                  agentStatusEnabled: false)
+            closed.applyAgentStatus(closed.readAgentStatus(now: Date()))
+            let label = MenuBarLabel.make(temperature: 48,
+                                          waitingCount: closed.waitingStatuses.count)
+            check("关闭态菜单栏无 ⏸", label == "48°", label)
+        }
+        check("关闭态零访问状态目录", closedSpy.scanCount == 0, "\(closedSpy.scanCount) 次")
 
         // 7) 通知层门禁：裸二进制（本机 .build/debug/Manatee）下必须自认不可用，
         //    且调用不崩。用 nil bundle id 构造，CI 里即使 e2e 跑在 Manatee.app 内

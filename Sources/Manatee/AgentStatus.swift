@@ -193,3 +193,13 @@ final class AgentStatusStore: Sendable {
         }
     }
 }
+
+/// `AppModel` 只需要「读一次状态目录」这一件事。
+///
+/// 抽成协议是为了让测试注入 spy，直接断言功能关闭时**一次都没访问过目录**——
+/// 只断言「结果为空」证明不了零访问，扫了再丢同样会得到空结果。
+protocol AgentStatusReading {
+    func scan(now: Date) -> AgentStatusStore.ScanResult
+}
+
+extension AgentStatusStore: AgentStatusReading {}

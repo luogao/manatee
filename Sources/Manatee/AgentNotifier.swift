@@ -245,3 +245,11 @@ extension AgentNotifier: UNUserNotificationCenterDelegate {
         completionHandler([.banner, .sound])
     }
 }
+
+/// 通知层的注入点。`feature.agentStatus.enabled == false` 时 AppModel 连
+/// `evaluate` 都不该调——状态都不扫，自然也没有「非等待 → 等待」的跃迁可报。
+protocol AgentStatusNotifying: AnyObject {
+    func evaluate(statuses: [AgentStatus], now: Date, agentNames: [String: String])
+}
+
+extension AgentNotifier: AgentStatusNotifying {}
