@@ -89,8 +89,11 @@ final class Updater: ObservableObject {
     private func attempt(_ step: Int, silent: Bool) {
         // 所有回调都在后台队列，这里统一回主线程再改状态
         let hop: FetchDone = { [weak self] result in
+            // 先解包再进 Task。Swift 5.10 把 `[weak self]` 当成可变捕获，
+            // 内层 Task 读它会报 "reference to captured var 'self' in concurrently-executing code"；
+            // 解包成不可变的强引用后就不再是「并发读可变捕获」，5.10 和 6.x 都能编过。
+            guard let self else { return }
             Task { @MainActor in
-                guard let self else { return }
                 if case .failure(let err) = result, step < 2 {
                     Debug.log("update: 第 \(step + 1) 级失败 \(err.localizedDescription)，降级")
                     self.attempt(step + 1, silent: silent)
