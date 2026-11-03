@@ -7,9 +7,16 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    # macos-14 默认 Xcode 15.4 / Swift 5.10：工具链不带 swift-testing，还会误报
+    # Updater 里 [weak self] 的并发捕获。换 macOS 26 镜像（默认 Xcode 26.6 / Swift 6.3），
+    # 并在下面显式钉住，避免镜像默认值漂移。
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode 26.6
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app
+          xcodebuild -version
       - name: Swift version
         run: swift --version
       - name: Build (debug)
@@ -19,4 +26,8 @@ jobs:
       - name: Build (release)
         run: swift build -c release
       - name: E2E self-check
-        run: .build/debug/Manatee --e2e
+        # 裸二进制（.build/debug/Manatee）下 Bundle.main 不是 .app，包校验必然失败。
+        # 装进 .app 再跑，包校验才是在真验打包产物，不是跳过。
+        run: |
+          scripts/bundle.sh debug
+          ./build/Manatee.app/Contents/MacOS/Manatee --e2e
