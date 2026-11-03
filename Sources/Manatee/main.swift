@@ -6,6 +6,11 @@ import SwiftUI
 
 let argv = CommandLine.arguments
 
+// agent hook 调用：写一个状态文件就退出，必须排在所有 GUI 初始化之前
+if argv.contains("--hook") {
+    exit(runHook(argv))
+}
+
 if argv.contains("--dump") {
     runDump()
     exit(0)
@@ -363,8 +368,88 @@ func runDump() {
         }
     }
 
+    print("\n=== Agent 状态 ===")
+    // 与写入方走同一套目录解析，MANATEE_STATE_DIR 才能让 --dump 看临时目录；
+    // 默认仍是真实路径，没设置时行为和 AgentStatusStore() 一致
+    let statusScan = AgentStatusStore(directory: AgentStatusWriter.resolvedDirectory).scan()
+    if statusScan.statuses.isEmpty { print("  (无)") }
+    for status in statusScan.statuses {
+        // 读取方已把过期记录的 state 改成 idle，这里再用 (stale) 标出原始打分
+        var line = "  \(status.sessionID)  \(status.agent)  \(status.state.rawValue)  \(status.cwd)"
+        if let message = status.message { line += "  \(message)" }
+        if status.isStale { line += " (stale)" }
+        print(line)
+    }
+    if statusScan.skippedCount > 0 {
+        print("  跳过 \(statusScan.skippedCount) 个坏文件")
+    }
+
     print("\n=== Top CPU 进程（不限 agent）===")
     for p in procs.sorted(by: { $0.cpuPercent > $1.cpuPercent }).prefix(6) {
         print(String(format: "  %-24@ %6.1f%%  pid=%d", SessionAggregator.shortName(p) as NSString, p.cpuPercent, p.pid))
     }
+}
+
+// ── Agent 状态上报（hook CLI）──
+
+/// `Manatee --hook --state <s> --agent <id> --cwd <path> --session <id> [--message <text>]`
+///
+/// 由 agent 的 hook 调用（PRD 5.1）：写一个状态文件就退出，不碰 AppKit。
+/// 成功返回 0；参数有问题返回 2，stderr 只打一行，避免污染 hook 的上层提示。
+func runHook(_ argv: [String]) -> Int32 {
+    // 参数 → 归一化键；`--hook` 是唯一的无值开关，单独处理。
+    // 必须放在函数里：main.swift 的顶层 let 按文本顺序初始化，
+    // 而本函数被顶层首行调用，那时后文声明的全局变量还没赋值（会 EXC_BAD_ACCESS）。
+    let flags: [String: String] = [
+        "--state": "state",
+        "--agent": "agent",
+        "--cwd": "cwd",
+        "--session": "session",
+        "--message": "message",
+    ]
+
+    var options: [String: String] = [:]
+    var i = 1
+    while i < argv.count {
+        let arg = argv[i]
+        guard arg.hasPrefix("--") else { return hookFail("无法识别的参数 \(arg)") }
+        i += 1
+        if arg == "--hook" { continue }
+
+        let key: String
+        let value: String
+        if let eq = arg.firstIndex(of: "=") {
+            key = String(arg[arg.startIndex..<eq])
+            value = String(arg[arg.index(after: eq)...])
+        } else {
+            guard i < argv.count else { return hookFail("\(arg) 缺少取值") }
+            key = arg
+            value = argv[i]
+            i += 1
+        }
+        guard let canonical = flags[key] else { return hookFail("未知参数 \(key)") }
+        options[canonical] = value
+    }
+
+    // 空值按缺参数处理：读取方会把空字段当坏文件跳过，报错比静默写坏文件清楚
+    guard let state = options["state"], !state.isEmpty else { return hookFail("缺少 --state") }
+    guard let agent = options["agent"], !agent.isEmpty else { return hookFail("缺少 --agent") }
+    guard let cwd = options["cwd"], !cwd.isEmpty else { return hookFail("缺少 --cwd") }
+    guard let session = options["session"], !session.isEmpty else { return hookFail("缺少 --session") }
+
+    do {
+        try AgentStatusWriter().write(sessionID: session, agent: agent, state: state,
+                                      cwd: cwd, message: options["message"])
+    } catch let error as AgentStatusWriterError {
+        return hookFail(error.description)
+    } catch {
+        return hookFail("\(error)")
+    }
+    return 0
+}
+
+/// 失败统一出口：stderr 一行 + 退出码 2（参数错误，不是崩溃）。
+func hookFail(_ reason: String) -> Int32 {
+    FileHandle.standardError.write(Data("manatee-hook: \(reason)\n".utf8))
+    return 2
 }
