@@ -67,7 +67,27 @@ enum E2E {
                   "2 个 waiting")
         }
 
-        // 7) 在线更新：版本比较 + release 解析 + 包校验
+        // 7) 通知层门禁：裸二进制（本机 .build/debug/Manatee）下必须自认不可用，
+        //    且调用不崩。用 nil bundle id 构造，CI 里即使 e2e 跑在 Manatee.app 内
+        //    （见 ci.yml）也覆盖得到这条路径，不会去碰系统通知中心。
+        let bareNotifier = AgentNotifier(bundleIdentifier: nil)
+        check("裸二进制下通知层不可用", !bareNotifier.isAvailable)
+        bareNotifier.evaluate(statuses: [
+            AgentStatus(sessionID: "e2e-notify", agent: "claude", state: .waiting,
+                        cwd: "/Users/e2e/project", message: nil,
+                        notificationType: "permission_prompt", pid: nil,
+                        updatedAt: Date(), isStale: false),
+        ])
+        check("裸二进制下通知调用不崩", bareNotifier.pendingCount == 0)
+        // 反过来：装进 .app 后 bundle id 存在，门禁必须放行。CI 里 e2e 就是在
+        // Manatee.app 内跑的（见 ci.yml），这条能在真实打包产物上验证门禁的另一面。
+        if Bundle.main.bundleIdentifier != nil {
+            check("打包后通知层可用", AgentNotifier().isAvailable)
+        } else {
+            skip("打包后通知层可用（需要 .app 环境）")
+        }
+
+        // 8) 在线更新：版本比较 + release 解析 + 包校验
         check("版本比较 0.7.0 > 0.6.5", Semver.isNewer("0.7.0", than: "0.6.5"))
         check("版本比较 0.6.10 > 0.6.9", Semver.isNewer("0.6.10", than: "0.6.9"))
         check("版本比较 同版本不更新", !Semver.isNewer("0.6.5", than: "0.6.5"))
