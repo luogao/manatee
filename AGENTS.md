@@ -6,7 +6,7 @@
 
 **Manatee** —— macOS 菜单栏小工具。显示哪个 AI agent（Claude Code / Codex / Cursor…）正在占满 CPU 并烤热机器，并把它降到能效核降温，不中断任务。
 
-灵感来自 [WhoIsCooking](https://whoiscooking.site)，独立实现，MIT。当前 0.7.0：菜单栏常驻、面板 / 设置页、一键降温、连续满载提醒、开发端口、资源看板、在线更新都已落地（M1 / M2）；刘海形态（PRD F7）留到下期。
+灵感来自 [WhoIsCooking](https://whoiscooking.site)，独立实现，MIT。当前 0.8.0：菜单栏常驻、面板 / 设置页、一键降温、连续满载提醒、开发端口、资源看板、在线更新都已落地（M1 / M2）；刘海形态（PRD F7）留到下期。
 
 ## 目录
 
