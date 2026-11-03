@@ -196,6 +196,26 @@ if argv.contains("--render") {
         model.alerts = [hot.rootPid: 720]
         model.processCount = 869
     }
+    // 等待态种子：--waiting 塞 2 个 waiting，菜单栏出 "43° ⏸2"、面板出两个徽标。
+    // 放在 --demo 之后，才能对到演示用的会话；带 pid 是让演示数据精确命中，
+    // 真实 hook payload 没有 pid，走 cwd + agent 匹配。
+    if argv.contains("--waiting") {
+        let now = Date()
+        let types: [String?] = ["permission_prompt", "idle_prompt"]
+        let targets = Array(model.sessions.prefix(2))
+        model.waitingStatuses = (0..<2).map { i in
+            let session = targets.indices.contains(i) ? targets[i] : nil
+            return AgentStatus(sessionID: "render-waiting-\(i + 1)",
+                               agent: session?.def.id ?? (i == 0 ? "claude" : "codex"),
+                               state: .waiting,
+                               cwd: session?.cwd ?? "/Users/gaogao/Documents/Hermes/manatee",
+                               message: nil,
+                               notificationType: types[i],
+                               pid: session.map { Int($0.rootPid) },
+                               updatedAt: now,
+                               isStale: false)
+        }
+    }
     let out = (argv.first(where: { $0.hasPrefix("--out=") })?.dropFirst(6)).map(String.init)
         ?? "/Users/gaogao/Documents/Hermes/manatee/poc-panel.png"
     // 截图用：--update=available|downloading|installing|uptodate，伪造更新状态
@@ -222,12 +242,25 @@ if argv.contains("--render") {
         // 离屏渲染时 ScrollView 会整块空白，两张图各自关掉滚动
         let initialTab: PanelTab = argv.contains("--tab=ports") ? .ports : .agents
         let openPort = argv.contains("--port-open") ? model.devServices.first?.id : nil
+        let panel = PanelView(model: model, scrollable: argv.contains("--snapshot"),
+                              initialTab: initialTab, initialPort: openPort)
+        // --waiting 出图时在面板上方垫一条真实菜单栏，一张图同时看到 ⏸ 与面板徽标
+        let showMenuBar = argv.contains("--waiting")
         let view = renderDashboard
             ? AnyView(DashboardView(preload: true))
             : renderSettings
             ? AnyView(SettingsView(onClose: {}, scrollable: false))
-            : AnyView(PanelView(model: model, scrollable: argv.contains("--snapshot"),
-                                initialTab: initialTab, initialPort: openPort))
+            : showMenuBar
+            ? AnyView(VStack(spacing: 0) {
+                MenuBarPreview(temperature: model.temperature,
+                               waitingCount: model.waitingStatuses.count,
+                               level: model.level)
+                panel
+            })
+            : AnyView(panel)
+        if showMenuBar {
+            print("menubar: \(MenuBarLabel.make(temperature: model.temperature, waitingCount: model.waitingStatuses.count))")
+        }
         // ImageRenderer 渲染 ScrollView 会整块空白，滚动版走 NSHostingView 离屏快照
         let useHost = argv.contains("--snapshot")
         if useHost {
@@ -376,6 +409,7 @@ func runDump() {
     for status in statusScan.statuses {
         // 读取方已把过期记录的 state 改成 idle，这里再用 (stale) 标出原始打分
         var line = "  \(status.sessionID)  \(status.agent)  \(status.state.rawValue)  \(status.cwd)"
+        if let type = status.notificationType { line += "  [\(type)]" }
         if let message = status.message { line += "  \(message)" }
         if status.isStale { line += " (stale)" }
         print(line)
@@ -392,60 +426,30 @@ func runDump() {
 
 // ── Agent 状态上报（hook CLI）──
 
-/// `Manatee --hook --state <s> --agent <id> --cwd <path> --session <id> [--message <text>]`
+/// `Manatee --hook --state <s> --agent <id> --cwd <path> --session <id> [--message <text>]
+///            [--notification-type permission_prompt|idle_prompt]`
 ///
 /// 由 agent 的 hook 调用（PRD 5.1）：写一个状态文件就退出，不碰 AppKit。
 /// 成功返回 0；参数有问题返回 2，stderr 只打一行，避免污染 hook 的上层提示。
 func runHook(_ argv: [String]) -> Int32 {
-    // 参数 → 归一化键；`--hook` 是唯一的无值开关，单独处理。
-    // 必须放在函数里：main.swift 的顶层 let 按文本顺序初始化，
-    // 而本函数被顶层首行调用，那时后文声明的全局变量还没赋值（会 EXC_BAD_ACCESS）。
-    let flags: [String: String] = [
-        "--state": "state",
-        "--agent": "agent",
-        "--cwd": "cwd",
-        "--session": "session",
-        "--message": "message",
-    ]
-
-    var options: [String: String] = [:]
-    var i = 1
-    while i < argv.count {
-        let arg = argv[i]
-        guard arg.hasPrefix("--") else { return hookFail("无法识别的参数 \(arg)") }
-        i += 1
-        if arg == "--hook" { continue }
-
-        let key: String
-        let value: String
-        if let eq = arg.firstIndex(of: "=") {
-            key = String(arg[arg.startIndex..<eq])
-            value = String(arg[arg.index(after: eq)...])
-        } else {
-            guard i < argv.count else { return hookFail("\(arg) 缺少取值") }
-            key = arg
-            value = argv[i]
-            i += 1
+    // 解析放在 HookCommand 里：本文件顶层 let 按文本顺序初始化，而本函数被
+    // 顶层首行调用，那时后文声明的全局变量还没赋值（会 EXC_BAD_ACCESS）。
+    switch HookCommand.parse(argv) {
+    case .failure(let reason):
+        return hookFail(reason.description)
+    case .success(let cmd):
+        do {
+            try AgentStatusWriter().write(sessionID: cmd.session, agent: cmd.agent,
+                                          state: cmd.state, cwd: cmd.cwd,
+                                          message: cmd.message,
+                                          notificationType: cmd.notificationType)
+        } catch let error as AgentStatusWriterError {
+            return hookFail(error.description)
+        } catch {
+            return hookFail("\(error)")
         }
-        guard let canonical = flags[key] else { return hookFail("未知参数 \(key)") }
-        options[canonical] = value
+        return 0
     }
-
-    // 空值按缺参数处理：读取方会把空字段当坏文件跳过，报错比静默写坏文件清楚
-    guard let state = options["state"], !state.isEmpty else { return hookFail("缺少 --state") }
-    guard let agent = options["agent"], !agent.isEmpty else { return hookFail("缺少 --agent") }
-    guard let cwd = options["cwd"], !cwd.isEmpty else { return hookFail("缺少 --cwd") }
-    guard let session = options["session"], !session.isEmpty else { return hookFail("缺少 --session") }
-
-    do {
-        try AgentStatusWriter().write(sessionID: session, agent: agent, state: state,
-                                      cwd: cwd, message: options["message"])
-    } catch let error as AgentStatusWriterError {
-        return hookFail(error.description)
-    } catch {
-        return hookFail("\(error)")
-    }
-    return 0
 }
 
 /// 失败统一出口：stderr 一行 + 退出码 2（参数错误，不是崩溃）。

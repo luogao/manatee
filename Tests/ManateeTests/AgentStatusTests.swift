@@ -165,6 +165,21 @@ struct AgentStatusTests {
         }
     }
 
+    @Test("notification_type 读出；旧文件没有该键 → nil（向后兼容）")
+    func 等待细分() throws {
+        try withTempDir { dir in
+            try writeStatus("perm.json", in: dir, extra: ["notification_type": "permission_prompt"])
+            try writeStatus("old.json", in: dir)
+
+            let result = AgentStatusStore(directory: dir).scan(now: now)
+            let byID = Dictionary(uniqueKeysWithValues: result.statuses.map { ($0.sessionID, $0) })
+
+            #expect(byID["perm"]?.notificationType == "permission_prompt")
+            #expect(byID["old"]?.notificationType == nil)
+            #expect(result.skippedCount == 0)
+        }
+    }
+
     @Test("pid / message / 非 waiting 状态原样读出")
     func 字段透传() throws {
         try withTempDir { dir in

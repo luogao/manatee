@@ -47,7 +47,27 @@ enum E2E {
                   "640×760")
         }
 
-        // 6) 在线更新：版本比较 + release 解析 + 包校验
+        // 6) 等待态：菜单栏文案拼装 + 等待中的面板能建出来
+        let waitingLabel = MenuBarLabel.make(temperature: 48, waitingCount: 2)
+        check("菜单栏等待文案", waitingLabel == "48° ⏸2", waitingLabel)
+        MainActor.assumeIsolated {
+            let model = AppModel()
+            model.waitingStatuses = [
+                AgentStatus(sessionID: "e2e-wait-perm", agent: "claude", state: .waiting,
+                            cwd: "/Users/e2e/project-one", message: nil,
+                            notificationType: "permission_prompt", pid: nil,
+                            updatedAt: Date(), isStale: false),
+                AgentStatus(sessionID: "e2e-wait-input", agent: "codex", state: .waiting,
+                            cwd: "/Users/e2e/project-two", message: nil,
+                            notificationType: "idle_prompt", pid: nil,
+                            updatedAt: Date(), isStale: false),
+            ]
+            check("等待态面板视图",
+                  renders(PanelView(model: model, scrollable: true), in: CGSize(width: 340, height: 580)),
+                  "2 个 waiting")
+        }
+
+        // 7) 在线更新：版本比较 + release 解析 + 包校验
         check("版本比较 0.7.0 > 0.6.5", Semver.isNewer("0.7.0", than: "0.6.5"))
         check("版本比较 0.6.10 > 0.6.9", Semver.isNewer("0.6.10", than: "0.6.9"))
         check("版本比较 同版本不更新", !Semver.isNewer("0.6.5", than: "0.6.5"))

@@ -60,17 +60,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private var lastTitle = ""
+    /// 上次写入的「标题 + 等待数」。只比文字不够：温度不变、等待数变化时
+    /// 也必须重绘，否则菜单栏会卡在没有 ⏸ 的旧文案上。
+    private var lastTitleKey = ""
 
     private func refreshTitle() {
         guard let btn = statusItem.button else { return }
         let t = model.temperature
-        let text = t > 0 ? "\(Int(t.rounded()))°" : "—°"
-        // 菜单栏重绘不便宜：只有读数变了才写 attributedTitle
-        guard text != lastTitle else { return }
-        lastTitle = text
+        let waitingCount = model.waitingStatuses.count
+        let text = MenuBarLabel.make(temperature: t, waitingCount: waitingCount)
+        let key = "\(text)|\(waitingCount)"
+        // 菜单栏重绘不便宜：只有标题或等待数变了才写 attributedTitle
+        guard key != lastTitleKey else { return }
+        lastTitleKey = key
         // 菜单栏是毛玻璃/深浅壁纸叠加，彩色文字会糊掉。文字一律用 labelColor
         // （系统自动反色），档位信息交给前面的小圆点。
+        // 温度档位圆点的语义与颜色一律不动：等待标记只追加在文字末尾。
         btn.image = t > 0 ? Self.dot(color: model.level.menuColor) : nil
         btn.imagePosition = .imageLeading
         btn.imageScaling = .scaleNone

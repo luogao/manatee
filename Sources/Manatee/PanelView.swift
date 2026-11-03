@@ -208,26 +208,54 @@ struct PanelView: View {
         }
     }
 
-    /// 0% CPU 且没有任何忙的子进程 = 空闲（只是挂着没干活），默认不占列表位置
+    /// 等待状态对到会话的结果。面板与菜单栏都从这里取，保证「⏸2」一定能看到两处标记。
+    private var waitingJoin: AgentStatusJoin {
+        AgentStatusJoiner.join(statuses: model.waitingStatuses, sessions: model.sessions)
+    }
+
+    /// 0% CPU 且没有任何忙的子进程 = 空闲（只是挂着没干活），默认不占列表位置。
+    /// 正在等待的会话不算空闲：它虽然 CPU 是 0，但必须留在列表里。
     private func isIdle(_ s: AgentSession) -> Bool {
-        !model.isCooled(s) && s.cpuPercent < 0.3 && s.busyChildren.isEmpty
+        waitingJoin.byRootPid[s.rootPid] == nil
+            && !model.isCooled(s) && s.cpuPercent < 0.3 && s.busyChildren.isEmpty
     }
 
     private var idleCount: Int { model.sessions.filter { isIdle($0) }.count }
 
     private var visibleSessions: [AgentSession] {
-        showIdle ? model.sessions : model.sessions.filter { !isIdle($0) }
+        let filtered = showIdle ? model.sessions : model.sessions.filter { !isIdle($0) }
+        let waiting = waitingJoin.byRootPid
+        // 等待行排最前：菜单栏出现 ⏸ 时，一眼就能在面板里找到对应会话。
+        // Swift 的 sorted 不保证稳定，用原下标兜底保持同组内原有 CPU 顺序。
+        return filtered.enumerated().sorted { a, b in
+            let aw = waiting[a.element.rootPid] != nil
+            let bw = waiting[b.element.rootPid] != nil
+            if aw != bw { return aw }
+            return a.offset < b.offset
+        }.map(\.element)
     }
 
     private var sessionsSection: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(visibleSessions.enumerated()), id: \.element.rootPid) { i, s in
+        let join = waitingJoin
+        let rows = visibleSessions
+        let total = rows.count + join.unmatched.count
+        return VStack(spacing: 0) {
+            // 对不上进程的等待单独成行，绝不挂到任意一行上。
+            // 少了这些行，菜单栏的计数就会比面板看到的标记多。
+            ForEach(Array(join.unmatched.enumerated()), id: \.element.sessionID) { i, status in
+                UnmatchedWaitingRow(status: status)
+                if i < total - 1 {
+                    Rectangle().fill(Theme.line).frame(height: 1)
+                }
+            }
+            ForEach(Array(rows.enumerated()), id: \.element.rootPid) { i, s in
                 SessionRow(session: s,
                            cooled: model.isCooled(s),
                            alert: model.alerts[s.rootPid],
+                           waiting: join.byRootPid[s.rootPid],
                            accent: accent,
                            action: { model.toggleCool(s) })
-                if i < visibleSessions.count - 1 {
+                if join.unmatched.count + i < total - 1 {
                     Rectangle().fill(Theme.line).frame(height: 1)
                 }
             }
@@ -281,10 +309,11 @@ struct PanelView: View {
     }
 
     private var agentsList: some View {
-        VStack(spacing: 0) {
-            if model.sessions.isEmpty {
+        let hasUnmatchedWaiting = !waitingJoin.unmatched.isEmpty
+        return VStack(spacing: 0) {
+            if model.sessions.isEmpty && !hasUnmatchedWaiting {
                 emptyState
-            } else if visibleSessions.isEmpty {
+            } else if visibleSessions.isEmpty && !hasUnmatchedWaiting {
                 idleOnlyState
             } else {
                 sessionsSection
@@ -561,6 +590,8 @@ struct SessionRow: View {
     let cooled: Bool
     /// 连续满载已持续的秒数（未达阈值时 nil）
     let alert: TimeInterval?
+    /// 这一行对应的等待状态（对不上时为 nil，由 UnmatchedWaitingRow 单独显示）
+    let waiting: AgentStatus?
     let accent: Color
     let action: () -> Void
 
@@ -607,10 +638,15 @@ struct SessionRow: View {
                       dim: !cooled && session.cpuPercent < 1)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.def.name)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(session.def.name)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    if let waiting, let badge = AgentStatusBadge.make(for: waiting) {
+                        StatusBadgeView(badge: badge).fixedSize()
+                    }
+                }
                 Text(subtitle)
                     .font(.system(size: 10.5))
                     .foregroundStyle(alerting ? Theme.danger.opacity(0.9) : Theme.ink2)
@@ -701,6 +737,83 @@ struct SessionRow: View {
         .padding(.trailing, 8)
         .padding(.bottom, 11)
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+}
+
+// MARK: - 等待徽标
+
+/// 行内小徽标。只表达状态，不展开任何命令内容（payload 里也没有）。
+struct StatusBadgeView: View {
+    let badge: AgentStatusBadge
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: badge == .running ? "play.fill"
+                  : (badge == .error ? "exclamationmark" : "pause.fill"))
+                .font(.system(size: 6, weight: .bold))
+            Text(badge.label)
+                .font(.system(size: 8.5, weight: .medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .foregroundStyle(badge == .error ? Theme.danger : Theme.accent)
+        .padding(.horizontal, 4)
+        .frame(height: 15)
+        .background(
+            RoundedRectangle(cornerRadius: 3)
+                .fill((badge == .error ? Theme.danger : Theme.accent).opacity(0.13))
+        )
+    }
+}
+
+/// 菜单栏有 ⏸，但进程表里找不到对应会话时的那一行。
+/// 宁可单独列出来，也不把徽标挂到别的 agent 上。
+struct UnmatchedWaitingRow: View {
+    let status: AgentStatus
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "pause.circle")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 15)
+            Text(WaitingFallback.text(agent: status.agent, cwd: status.cwd))
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.ink2)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 11)
+        .padding(.horizontal, 6)
+    }
+}
+
+// MARK: - 菜单栏预览（仅 --render 截图用）
+
+/// 把真实的 `MenuBarLabel` 文案画成一条菜单栏，垫在面板上方。
+/// 只用于 `--render --waiting` 出验收图：面板本身看不到菜单栏，
+/// 没有这一条就没法用一张图证明 `⏸` 在温度数字后面。产品运行时不用。
+struct MenuBarPreview: View {
+    let temperature: Double
+    let waitingCount: Int
+    let level: HeatLevel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Spacer(minLength: 0)
+            if temperature > 0 {
+                Circle()
+                    .fill(Color(nsColor: level.menuColor))
+                    .frame(width: 6, height: 6)
+            }
+            Text(MenuBarLabel.make(temperature: temperature, waitingCount: waitingCount))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.92))
+        }
+        .padding(.trailing, 16)
+        .frame(width: 340, height: 30)
+        .background(Color(red: 0.16, green: 0.16, blue: 0.17))
     }
 }
 
