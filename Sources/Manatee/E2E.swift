@@ -65,14 +65,22 @@ enum E2E {
               rel?.zipURL?.lastPathComponent ?? "nil")
         check("release 坏 JSON 不崩", Updater.parse(Data("{}".utf8)) == nil)
 
-        // 包校验：拿当前安装的 app 当正样本，改 id 当负样本
+        // 包校验：拿当前安装的 app 当正样本，改 id 当负样本。
+        // 裸二进制（.build/debug/Manatee、CI 的 e2e）下 Bundle.main 不是 .app，没有
+        // Contents/Info.plist，validate 必然抛错——那是选错了样本，不是校验有问题。
+        // 所以跳过并标 [skip]（不计失败），打包后的验收里仍照旧真校验。
         let selfApp = Bundle.main.bundleURL
-        var badBundle = false
-        do { try Updater.validate(selfApp, expecting: AppInfo.version) } catch { badBundle = true }
-        check("包校验 正样本通过", !badBundle, selfApp.lastPathComponent)
-        check("包校验 拒绝低版本",
-              { do { try Updater.validate(selfApp, expecting: "99.0.0"); return false }
-                catch { return true } }())
+        if selfApp.pathExtension == "app" {
+            var badBundle = false
+            do { try Updater.validate(selfApp, expecting: AppInfo.version) } catch { badBundle = true }
+            check("包校验 正样本通过", !badBundle, selfApp.lastPathComponent)
+            check("包校验 拒绝低版本",
+                  { do { try Updater.validate(selfApp, expecting: "99.0.0"); return false }
+                    catch { return true } }())
+        } else {
+            skip("包校验 正样本通过（需要 .app 环境）")
+            skip("包校验 拒绝低版本（需要 .app 环境）")
+        }
 
         print(failures == 0 ? "e2e passed" : "e2e failed: \(failures) 项")
         return failures == 0 ? 0 : 1
@@ -86,6 +94,11 @@ enum E2E {
         host.appearance = NSAppearance(named: .darkAqua)
         host.layoutSubtreeIfNeeded()
         return !host.subviews.isEmpty && host.fittingSize.height > 20
+    }
+
+    /// 环境不具备时跳过：不打印 [fail]，也不计入失败数
+    private static func skip(_ name: String) {
+        print("  [skip] \(name)")
     }
 
     private static func check(_ name: String, _ ok: Bool, _ detail: String = "") {
