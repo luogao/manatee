@@ -16,7 +16,11 @@ struct AgentStatus: Equatable, Sendable {
     /// 取自状态文件名去掉 `.json`。hook payload 里的 `session_id` 也是它。
     let sessionID: String
     let agent: String
-    /// 已应用过期规则后的状态：文件超 5 分钟未更新时这里会是 `.idle`。
+    /// 文件里读到的原始状态，**不做过期改写**。
+    ///
+    /// 过期只由 `isStale` 表达：Claude Code 一次等待只发一条 Notification、之后
+    /// 不再刷新 `updated_at`，所以「文件旧」不等于「人已经走了」。把 waiting 改写成
+    /// idle 会让下游再也无从用进程存活来佐证（见 `WaitingPolicy`）。
     let state: AgentActivity
     let cwd: String
     let message: String?
@@ -47,7 +51,8 @@ final class AgentStatusStore: Sendable {
         static let empty = ScanResult(statuses: [], skippedCount: 0)
     }
 
-    /// 超过 5 分钟没有更新 → 按 idle 处理，避免菜单栏卡在「等待」。
+    /// 超过 5 分钟没有更新 → `isStale = true`（原始 `state` 保留不动）。
+    /// 是否还该显示成「等待」由 `WaitingPolicy` 结合进程存活判断。
     static let staleAfter: TimeInterval = 300
     /// 超过 24 小时的文件在扫描时顺手清掉，避免目录无限增长。
     static let expireAfter: TimeInterval = 24 * 60 * 60
@@ -165,7 +170,7 @@ final class AgentStatusStore: Sendable {
         return .status(AgentStatus(
             sessionID: sessionID,
             agent: agent,
-            state: stale ? .idle : parsedState,
+            state: parsedState,
             cwd: cwd,
             message: message,
             notificationType: notificationType,

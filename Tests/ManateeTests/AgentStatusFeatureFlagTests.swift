@@ -212,4 +212,26 @@ struct AgentStatusFeatureModelTests {
         #expect(notifier.evaluateCount == 0)
         #expect(MenuBarLabel.make(temperature: 48, waitingCount: model.waitingStatuses.count) == "48°")
     }
+
+    @Test("长等待：AppModel 把活会话快照交给 WaitingPolicy 决定可见性")
+    @MainActor
+    func 长等待靠进程存活() {
+        let stale = AgentStatus(sessionID: "session-long", agent: "claude-code",
+                                state: .waiting, cwd: "/w/app", message: nil,
+                                notificationType: "permission_prompt", pid: nil,
+                                updatedAt: now.addingTimeInterval(-360), isStale: true)
+        let spy = SpyStatusReader(result: scanResult([stale]))
+        let model = AppModel(statusStore: spy, notifier: SpyNotifier(), agentStatusEnabled: true)
+
+        let def = AgentDef(id: "claude", name: "Claude Code", symbol: "circle",
+                           patterns: [], excludes: [], bin: nil, detect: [])
+        let live = AgentSession(def: def, rootPid: 900, cpuPercent: 0, pids: [900],
+                                busyChildren: [], cooled: false, hasOtherUid: false,
+                                cwd: "/w/app")
+
+        // 进程还在 → 仍算在等；进程没了 → 不再显示
+        #expect(model.readAgentStatus(now: now, liveSessions: [live]).waiting
+            .map(\.sessionID) == ["session-long"])
+        #expect(model.readAgentStatus(now: now).waiting.isEmpty)
+    }
 }

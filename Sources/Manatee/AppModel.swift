@@ -24,7 +24,7 @@ final class AppModel: ObservableObject {
     @Published var alerts: [Int32: TimeInterval] = [:]
     /// 残留的开发服务器
     @Published var devServices: [DevService] = []
-    /// 正在等用户输入的会话（只含 `.waiting`，过期的已由 store 降级成 `.idle`）。
+    /// 正在等用户输入的会话（只含 `.waiting`，由 `WaitingPolicy` 过滤）。
     /// 菜单栏的 ⏸ 与面板徽标都读这一份，保证两处计数一致。
     @Published var waitingStatuses: [AgentStatus] = []
     /// 面板是否展开：关着的时候只需要刷新菜单栏温度，不用每 2 秒扫全表
@@ -75,7 +75,7 @@ final class AppModel: ObservableObject {
         sessions = SessionAggregator.build(from: procs)
         processCount = procs.count
         devServices = PortScanner.scan()
-        waitingStatuses = readAgentStatus().waiting
+        waitingStatuses = readAgentStatus(liveSessions: sessions).waiting
         if let hot = temp?.hottestSilicon() ?? temp?.hottestAny() {
             temperature = hot.celsius
             sensorName = hot.name
@@ -84,11 +84,18 @@ final class AppModel: ObservableObject {
 
     /// 读一次状态目录。**关闭时零访问**：直接返回空，连一次 readdir 都不做。
     /// 可在后台队列调用（scan 本身不碰 UI）。
-    func readAgentStatus(now: Date = Date()) -> AgentStatusReadout {
+    ///
+    /// - Parameter liveSessions: 最近一次进程扫描的会话快照。过期的 waiting 只有对得上
+    ///   活着的会话才会继续显示（见 `WaitingPolicy`）；默认空只给无进程场景的测试用。
+    func readAgentStatus(now: Date = Date(),
+                         liveSessions: [AgentSession] = []) -> AgentStatusReadout {
         guard agentStatusEnabled else { return .empty }
         let statuses = statusStore.scan(now: now).statuses
-        // store 已把超 5 分钟的记录降级成 `.idle`，这里再挡一次是防御注入数据
-        let waiting = statuses.filter { $0.state == .waiting && !$0.isStale }
+        // store 保留原始 state，这里决定「哪些等待还该亮」：新事件直接可见，
+        // 过期事件靠进程存活佐证。非 waiting 不参与这个过滤。
+        let waiting = WaitingPolicy.visibleWaiting(statuses,
+                                                   liveSessions: liveSessions,
+                                                   now: now)
         return AgentStatusReadout(all: statuses, waiting: waiting)
     }
 
@@ -116,13 +123,16 @@ final class AppModel: ObservableObject {
         // 有会话处于降温状态时 6 秒扫一次（要抓 agent 新起的进程），否则关面板 10 秒
         let needScan = panelOpen || (!cooled.isEmpty && tickCount % 3 == 1) || (tickCount % 5 == 1)
         let needPorts = (tickCount % 30 == 1)        // 60 秒
+        // 在 main 上取一份会话快照：过期的等待要用进程存活佐证，而 `sessions`
+        // 是 @Published 主线程状态，不能从扫描队列直接读。
+        let liveSessions = sessions
         queue.async { [weak self] in
             guard let self else { return }
             // 等待状态每个 tick 都扫：菜单栏要求 2 秒内可见，不能等 10 秒的进程扫描。
             // 目录通常不存在（功能没开），那只是一次失败的 readdir，不建目录。
             // 开关关闭时 readAgentStatus 直接返回空：零访问、零通知。
             if self.agentStatusEnabled {
-                let readout = self.readAgentStatus()
+                let readout = self.readAgentStatus(liveSessions: liveSessions)
                 DispatchQueue.main.async {
                     self.applyAgentStatus(readout)
                 }

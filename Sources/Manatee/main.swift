@@ -407,7 +407,8 @@ func runDump() {
     let statusScan = AgentStatusStore(directory: AgentStatusWriter.resolvedDirectory).scan()
     if statusScan.statuses.isEmpty { print("  (无)") }
     for status in statusScan.statuses {
-        // 读取方已把过期记录的 state 改成 idle，这里再用 (stale) 标出原始打分
+        // 读取方保留原始 state，过期只体现在 isStale 上；这里用 (stale) 标出来，
+        // 「waiting (stale)」= 事件旧了，但进程若还活着菜单栏仍会显示 ⏸
         var line = "  \(status.sessionID)  \(status.agent)  \(status.state.rawValue)  \(status.cwd)"
         if let type = status.notificationType { line += "  [\(type)]" }
         if let message = status.message { line += "  \(message)" }

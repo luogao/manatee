@@ -83,13 +83,14 @@ struct AgentStatusTests {
 
             #expect(byID["edge-300"]?.state == .waiting)
             #expect(byID["edge-300"]?.isStale == false)
-            #expect(byID["edge-301"]?.state == .idle)
+            // 过期只翻转 isStale，原始 state 必须保留：下游要用它 + 进程存活判断
+            #expect(byID["edge-301"]?.state == .waiting)
             #expect(byID["edge-301"]?.isStale == true)
             #expect(result.skippedCount == 0)
         }
     }
 
-    @Test("6 分钟前的文件 → .idle + isStale = true")
+    @Test("6 分钟前的文件 → state 仍是 waiting + isStale = true")
     func 六分钟过期() throws {
         try withTempDir { dir in
             try writeStatus("old.json", in: dir, updatedAt: now.addingTimeInterval(-360))
@@ -97,7 +98,8 @@ struct AgentStatusTests {
             let result = AgentStatusStore(directory: dir).scan(now: now)
 
             #expect(result.statuses.count == 1)
-            #expect(result.statuses.first?.state == .idle)
+            // 读取侧不再把 waiting 改写成 idle：那会让「进程还活着」这条证据无从使用
+            #expect(result.statuses.first?.state == .waiting)
             #expect(result.statuses.first?.isStale == true)
         }
     }

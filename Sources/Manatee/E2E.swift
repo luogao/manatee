@@ -82,6 +82,24 @@ enum E2E {
                   "2 个 waiting")
         }
 
+        // 6a) 长等待：6 分钟前的 waiting 已 isStale，但进程还在 → 菜单栏仍该亮 ⏸；
+        //     进程没了 → 不可见。纯函数断言，保证打包态（.app 内跑 e2e）也覆盖到。
+        let sixMinutesAgo = Date().addingTimeInterval(-360)
+        let longWait = AgentStatus(sessionID: "e2e-long-wait", agent: "claude-code",
+                                   state: .waiting, cwd: "/Users/e2e/long-wait", message: nil,
+                                   notificationType: "permission_prompt", pid: nil,
+                                   updatedAt: sixMinutesAgo, isStale: true)
+        let liveDef = AgentDef(id: "claude", name: "Claude Code", symbol: "circle",
+                               patterns: [], excludes: [], bin: nil, detect: [])
+        let liveSession = AgentSession(def: liveDef, rootPid: 4242, cpuPercent: 0,
+                                       pids: [4242], busyChildren: [], cooled: false,
+                                       hasOtherUid: false, cwd: "/Users/e2e/long-wait")
+        check("长等待+活会话仍可见",
+              WaitingPolicy.visibleWaiting([longWait], liveSessions: [liveSession],
+                                           now: Date()).map(\.sessionID) == ["e2e-long-wait"])
+        check("长等待+无会话不可见",
+              WaitingPolicy.visibleWaiting([longWait], liveSessions: [], now: Date()).isEmpty)
+
         // 6b) 关闭态：spy 里有等待记录也不会被读到，菜单栏不能出现 ⏸。
         //     探针被调用就返回一条 waiting——如果哪天短路被去掉，这条会立刻挂。
         let closedSpy = E2EStatusReader()
