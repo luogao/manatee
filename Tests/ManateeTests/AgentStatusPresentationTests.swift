@@ -90,10 +90,15 @@ struct AgentStatusBadgeTests {
         #expect(AgentStatusBadge.error.label == L10n.t("异常", "Error"))
     }
 
-    @Test("idle 与过期记录不出徽标")
+    @Test("idle 不出徽标；过期的 waiting 仍出徽标（长等待靠进程存活保住）")
     func 空闲与过期() {
         #expect(AgentStatusBadge.make(for: status(.idle)) == nil)
-        #expect(AgentStatusBadge.make(for: status(.waiting, type: "permission_prompt", stale: true)) == nil)
+        // 过期只说明没有新事件，不再是「按 idle 处理」：面板与菜单栏必须一致
+        #expect(AgentStatusBadge.make(for: status(.waiting, type: "permission_prompt", stale: true))
+                == .waitingPermission)
+        // 非 waiting 状态过期后沿用旧行为：不出徽标
+        #expect(AgentStatusBadge.make(for: status(.running, stale: true)) == nil)
+        #expect(AgentStatusBadge.make(for: status(.error, stale: true)) == nil)
     }
 }
 

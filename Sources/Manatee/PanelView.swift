@@ -209,8 +209,11 @@ struct PanelView: View {
     }
 
     /// 等待状态对到会话的结果。面板与菜单栏都从这里取，保证「⏸2」一定能看到两处标记。
+    /// `waitingStatuses` 已由 `WaitingPolicy` 判过可见性（含靠进程存活保住的长等待），
+    /// 这里必须把过期记录也纳入匹配，否则菜单栏的计数会比面板标记多。
     private var waitingJoin: AgentStatusJoin {
-        AgentStatusJoiner.join(statuses: model.waitingStatuses, sessions: model.sessions)
+        AgentStatusJoiner.join(statuses: model.waitingStatuses, sessions: model.sessions,
+                               includeStale: true)
     }
 
     /// 0% CPU 且没有任何忙的子进程 = 空闲（只是挂着没干活），默认不占列表位置。
