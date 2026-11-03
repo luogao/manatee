@@ -1,6 +1,6 @@
 cask "manatee" do
-  version "0.6.5"
-  sha256 "2888d341b451b364f320e7f8f7813ab0175746306cb75554b4f94f0cf32014e0"
+  version "0.8.0"
+  sha256 "d0f8cec566707c4a3b502d01ee9fedba90b669268083e4a96eb32cb628a9ae03"
 
   url "https://github.com/luogao/manatee/releases/download/v#{version}/Manatee-#{version}.zip"
   name "Manatee"
