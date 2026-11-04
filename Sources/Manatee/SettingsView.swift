@@ -134,7 +134,7 @@ struct SettingsView: View {
             generalSection.id(1)
             alertSection.id(2)
             agentsSection.id(3)
-            UpdateSection().id(4)
+            UpdateSection(scrollable: scrollable).id(4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

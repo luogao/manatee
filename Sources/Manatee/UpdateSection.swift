@@ -7,6 +7,9 @@ struct UpdateSection: View {
     @ObservedObject private var up = Updater.shared
     @State private var hoverCheck = false
 
+    /// 截图/长图模式传 false：备注整段摊开，不套内层滚动（离屏渲染 ScrollView 会空白）
+    var scrollable: Bool = true
+
     private var current: String { AppInfo.version }
 
     var body: some View {
@@ -40,12 +43,10 @@ struct UpdateSection: View {
                     Text(L10n.t("新版本 v\(v) 已发布", "Version \(v) is available"))
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(Theme.accent)
+                    // GitHub 的 body 是真 markdown；以前当裸文本截断，用户看到一堆 `##` 和反引号
                     if let notes = up.remote?.notes, !notes.isEmpty {
-                        Text(notes.prefix(280))
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.ink2)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .lineLimit(4)
+                        ReleaseNotesView(notes: notes, scrollable: scrollable)
+                            .padding(.top, 2)
                     }
                     HStack(spacing: 10) {
                         Button {
