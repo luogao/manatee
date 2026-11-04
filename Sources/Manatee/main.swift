@@ -218,17 +218,23 @@ if argv.contains("--render") {
     }
     let out = (argv.first(where: { $0.hasPrefix("--out=") })?.dropFirst(6)).map(String.init)
         ?? "/Users/gaogao/Documents/Hermes/manatee/poc-panel.png"
-    // 截图用：--update=available|downloading|installing|uptodate，伪造更新状态
+    // 截图用：--update=available|downloading|installing|uptodate，伪造更新状态。
+    // 备注默认用 v0.8.0 的发布原文（真 markdown，含 `##`/列表/代码块），
+    // --notes-file=<path> 可以换成本地文件，免得每改一次备注就动源码。
     let updateArg = argv.first(where: { $0.hasPrefix("--update=") })?.dropFirst(9)
     if let updateArg {
+        let notesPath = argv.first(where: { $0.hasPrefix("--notes-file=") })?.dropFirst(13)
+        let notes = notesPath
+            .flatMap { try? String(contentsOf: URL(fileURLWithPath: String($0)), encoding: .utf8) }
+            ?? DebugFixtures.releaseNotesV080
         let fake = ReleaseInfo(
-            version: "0.7.0",
-            notes: "资源看板支持按 agent 分组；菜单栏图标在高负载时更醒目；修复了长时间运行后内存缓慢增长的问题。",
-            zipURL: URL(string: "https://example.com/Manatee-0.7.0.zip")!,
-            pageURL: URL(string: "https://github.com/luogao/manatee/releases")!)
+            version: "0.8.0",
+            notes: notes,
+            zipURL: URL(string: "https://example.com/Manatee-0.8.0.zip")!,
+            pageURL: URL(string: "https://github.com/luogao/manatee/releases/tag/v0.8.0")!)
         MainActor.assumeIsolated {
             switch updateArg {
-            case "available":   Updater.shared.debugSet(.available("0.7.0"), remote: fake)
+            case "available":   Updater.shared.debugSet(.available("0.8.0"), remote: fake)
             case "downloading": Updater.shared.debugSet(.downloading(0.42), remote: fake)
             case "installing":  Updater.shared.debugSet(.installing, remote: fake)
             case "uptodate":    Updater.shared.debugSet(.upToDate, remote: fake)

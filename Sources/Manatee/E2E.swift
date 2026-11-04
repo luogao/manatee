@@ -169,6 +169,28 @@ enum E2E {
             skip("包校验 拒绝低版本（需要 .app 环境）")
         }
 
+        // 9) release notes：真 markdown 要切成块；长备注在设置页里走内层滚动封顶，
+        //    不能把整页撑成几千像素（设置页自身还在外层 ScrollView 里，双层滚动是这里的风险）
+        MainActor.assumeIsolated {
+            let doc = MarkdownDocument.parse(DebugFixtures.releaseNotesV080)
+            check("长备注解析成块", doc.blocks.count >= 12, "\(doc.blocks.count) 块")
+
+            let full = NSHostingView(rootView: ReleaseNotesView(notes: DebugFixtures.releaseNotesV080,
+                                                                scrollable: false))
+            full.frame = NSRect(origin: .zero, size: CGSize(width: 464, height: 900))
+            full.appearance = NSAppearance(named: .darkAqua)
+            full.layoutSubtreeIfNeeded()
+            check("长备注长图模式整段展开", full.fittingSize.height > 300,
+                  "\(Int(full.fittingSize.height))pt")
+
+            let capped = NSHostingView(rootView: ReleaseNotesView(notes: DebugFixtures.releaseNotesV080))
+            capped.frame = NSRect(origin: .zero, size: CGSize(width: 464, height: 900))
+            capped.appearance = NSAppearance(named: .darkAqua)
+            capped.layoutSubtreeIfNeeded()
+            check("长备注在设置页里封顶", capped.fittingSize.height <= 260,
+                  "\(Int(capped.fittingSize.height))pt")
+        }
+
         print(failures == 0 ? "e2e passed" : "e2e failed: \(failures) 项")
         return failures == 0 ? 0 : 1
     }
